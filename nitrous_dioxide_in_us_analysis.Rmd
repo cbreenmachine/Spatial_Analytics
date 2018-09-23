@@ -1,0 +1,357 @@
+---
+title: 'NO$_2$ Sensor Analysis'
+author: "Coleman Breen"
+date: "September 10, 2018"
+output: html_document
+---
+## Analysis and visualization of NO$_2$ in the US
+
+Today we'll be looking at the presence of NO$_2$ around the UNited States. NO$_2$ is emitted by cars burning fossil fuels. Excess Nitrogen Dioxide causes respiratory issues in humans. It also causes acid rain and can create enough air pollution to make it hard to see. The National Ambient Air Quality Standards say that 100 parts per billion (ppb) is a safe exposure for one hour at a time. This gives us some idea about how much NO$_2$ is too much. You can read more about it [here](https://www.epa.gov/no2-pollution).  
+  
+We can look at data on NO$_2$ from the [EPA's website.](https://aqs.epa.gov/aqsweb/airdata/download_files.html)  In particular, we are interested in daily NO$_2$ levels for 2017. Later in this analysis, we'll also pull in O$_3$ data and compare the two pollutants.
+
+```{r}
+#--> Setup environment
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+library(tidyverse)
+```
+
+```{r}
+#--> Load in data
+no2_df <- read_csv('daily_42602_2017.csv')
+names(no2_df)
+```
+```{r}
+#--> Order the variables
+no2_df <- select(no2_df, 'State Name', 'City Name', 'AQI', 'Arithmetic Mean', 'Observation Percent', 
+                 'Observation Count', 'Date Local', 'Latitude', 'Longitude', everything())
+names(no2_df)
+```
+You can read about what's in the dataset [here.](https://aqs.epa.gov/aqsweb/airdata/FileFormats.html) A few takeaways:  
+
+1. State Code-County Code-Site Num-Parameter Code gives a unique identifier for each individual sensor. There can be multiple sensors with the same State Code-County Code-Site Num.  
+2. Sample Duration deals with the "length of time that air passes through the monitoring device."  
+3. Event Type can include things like wildfires and other things we may/may not want to include in analysis.  
+4. Arithmetic mean is the average presence of NO$_2$ (in ppb).  
+5. 1st Max Value gives the highest value of the day.
+
+# How many sensors are measuring NO$_2$?  
+To answer this question we will have to find how many unique sensore there are. This data set reports information from many sensors and different times of the day.
+
+```{r}
+#--> Create a unique identifier based on state, county codes, and site number
+no2_df %>%
+  mutate(Identifier = paste(no2_df$'State Code', no2_df$'County Code', 
+                            no2_df$'Site Num', sep = '-')) -> no2_df
+
+#--> Number of unique sensors
+length(unique(no2_df$Identifier))
+```
+There are 451 sensors around the United States measuring NO$_2$.
+
+# How well do these sensors work?  
+
+We will do some more manipulation to create a variable telling us what percent of the year each distinct sensor is working. The data report observation percent for individual days. We'll group these observations by the unique identifier we created earlier and then average their daily working percentage.
+
+```{r}
+#--> Yearly percent that unique sensors are working
+no2_df %>%
+  group_by(Identifier) %>%
+  summarise_at(vars('Observation Percent'), mean) %>%
+  ungroup() -> no2_simple_df
+
+#--> Join the unique sensors, yearly percentage, and lat/long
+no2_df %>%
+  ungroup() %>%
+  select('Identifier', 'Latitude', 'Longitude') %>%
+  full_join(no2_simple_df, by = 'Identifier') %>%
+  distinct() -> no2_simple_df
+
+#--> Rename variable 
+no2_simple_df <- rename(no2_simple_df, 'YearlyObsPercent' = 'Observation Percent')
+head(no2_simple_df)
+```
+We'll plot the distribution of 'YearlyObsPercent' to see how the sensors fare.
+
+```{r}
+library(ggplot2)
+
+#--> Simple histogram of sensor working percent
+ggplot(no2_simple_df, aes(YearlyObsPercent)) +
+  geom_histogram(binwidth = .5, fill = 'forestgreen', alpha = .75) +
+  theme_light() +
+  xlab('Time Working (percent of year)') +
+  ylab('Frequency')
+
+#--> Summary statisitcs for good measure
+summary(no2_simple_df$YearlyObsPercent)
+```
+
+Sensors seem to be very reliable. Nearly 3 in 4 sensors worked at least 95% of the year 2017. Most work well over 90% of the time.
+
+# Mapping the sensor locations
+
+```{r}
+library(ggmap)
+
+#--> Bound the map's coordinates
+no2_simple_df %>%
+  make_bbox(lat = Latitude, lon = Longitude) -> sensor_bbox
+
+#--> Create and print map
+sensor_map <- get_map(location = sensor_bbox, maptype = "toner-lite", zoom = 3)
+
+#--> Overlay sensors
+ggmap(sensor_map) +
+  geom_point(data = no2_simple_df, mapping = aes(x = Longitude, y = Latitude), color = 'blue', alpha = .25)
+```
+
+This gives us some sense of where the sensors are located to begin with. We see a higher concentration around California, Eastern Texas, and New England. There seems to be quite a few in Northern Utah and Wyoming, considering that those areas are not as densley populated.
+
+# Mapping NO$_2$ 
+
+We'll now turn our attention towards the presences of Nitrous Dioxide itself. Where is it most densley concentrated? 
+
+We don't have sensor data for each county so we will construct a heat map of the presence of NO$_02$ around the US.
+
+```{r, warning = FALSE, message = FALSE}
+#--> Rename variables so that DPLYR doesn't get tripped up by the spaces
+no2_df <- rename(no2_df, 'DailyMeanPPB' = 'Arithmetic Mean')
+
+#--> Compute a yearly average of NO2
+no2_df %>%
+  group_by(Identifier) %>%
+  summarise_at(vars('DailyMeanPPB'), mean) %>%
+  ungroup() -> daily_mean_no2_df
+
+#--> Compute a yearly mean AQI
+no2_df %>%
+  group_by(Identifier) %>%
+  summarise_at(vars('AQI'), mean) %>%
+  ungroup() -> daily_mean_AQI_df
+
+#--> Join the unique sensors, yearly NO2 ppb, and coordinates
+no2_df %>%
+  ungroup() %>%
+  select('State Name', 'City Name', 'Identifier', 'Latitude', 'Longitude') %>%
+  full_join(daily_mean_no2_df, by = 'Identifier') %>%
+  distinct() %>%
+  full_join(daily_mean_AQI_df) %>%
+  distinct() %>%
+  rename('DailyMeanAQI' = 'AQI') -> daily_mean_no2_df
+
+rm(daily_mean_AQI_df)
+
+#--> Take a look 
+head(daily_mean_no2_df, 5)
+```
+
+We've created a data frame that gives us the average daily ppb of NO$_2$ linked to specific coordinates on a map. We'll create a heat map to visualize the presence of Nitrous Dioxide around the lower 48.
+
+```{r}
+#--> Take out Alaska, Hawaii, Puerto Rico to see trends in the lower 48
+remove_states_v = c("Alaska", "Hawaii", "Puerto Rico")
+
+daily_mean_no2_df %>%
+  filter(!('State Name' %in% remove_states_v)) %>%
+  filter(Longitude > -142) -> daily_mean_no2_df
+```
+
+```{r}
+#--> Bound the map's coordinates
+daily_mean_no2_df %>%
+  make_bbox(lat = Latitude, lon = Longitude) -> no2_box
+
+#--> Create underlying map
+no2_map <- get_map(location = no2_box, maptype = "toner-lite", zoom = 3)
+
+#--> Need RColorBrewer
+library(RColorBrewer)
+
+#--> Overlay heat map info (NO2)
+ggmap(no2_map) +
+  stat_density2d(data = daily_mean_no2_df, 
+             mapping = aes(x = Longitude, y = Latitude, fill =..level..), 
+             geom = "polygon", alpha = .3) +
+  scale_fill_gradientn(name = "NO2 (%)", colours=rev(brewer.pal(10, "Spectral"))) 
+```
+
+We can see greater concentrations of NO$_2$ around Southern California, Northern Utah/Colorado, East Texas/Louisiana, and New England. However, stat_density_2d is not as precise because we are seeing NO$_2$ measurements where there are no sensors. Let's try this using sf.
+
+```{r}
+
+#--> Load in libraries
+library(sf)
+library(leaflet)
+
+#--> Create an sf compatable data type
+daily_mean_no2_df <- daily_mean_no2_df[order(daily_mean_no2_df$DailyMeanPPB), ]
+daily_mean_no2_sf <- st_as_sf(daily_mean_no2_df, coords = c("Longitude", "Latitude"))
+
+#--> Color spectrum
+Npal <- colorNumeric(
+  palette = "YlOrRd", n = 10,
+  domain = daily_mean_no2_sf$DailyMeanPPB
+)
+
+#--> Make our map
+no2_circles_map <- daily_mean_no2_sf %>%
+  leaflet() %>%
+  addProviderTiles(providers$Stamen.TonerLines, group = "Basemap") %>%
+  addProviderTiles(providers$Stamen.TonerLite, group = "Basemap") %>%
+  addCircles(radius = daily_mean_no2_sf$DailyMeanPPB*5000, fillOpacity = .6, 
+             fillColor = Npal(daily_mean_no2_sf$DailyMeanPPB), stroke = FALSE) %>%
+  addLegend("bottomright", pal = Npal, values = ~DailyMeanPPB, 
+            labFormat = function(type, cuts, p) {
+              n = length(cuts) 
+              paste0(prettyNum(cuts[-n], digits=0, big.mark = ",", scientific=F), 
+                     " - ", prettyNum(cuts[-1], digits=0, big.mark=",", scientific=F))},
+            title = "Avg. Daily NO2 (ppb)", opacity = 1)
+
+no2_circles_map
+```
+
+I'm curious to see how similar maps displaying the AQI and O$_3$ in a similar way. We already have the AQI data but let's load in O$_3$ and take a look at that.
+
+```{r}
+o3_df <- read_csv('daily_44201_2017.csv')
+```
+
+```{r}
+#--> Create a unique identifier based on state, county codes, and site number
+o3_df %>%
+  mutate(Identifier = paste(o3_df$'State Code', o3_df$'County Code', 
+                            o3_df$'Site Num', sep = '-')) -> o3_df
+
+#--> Number of unique sensors
+length(unique(o3_df$Identifier))
+```
+There are 1265 sensors measuring ozone in the US. We'll do a similar pipeline to what we diw with Nitrous Dioxide to create a map showing where Ozone levels are highest.
+
+```{r}
+#--> Make variable names DPLYR friendly
+o3_df <- rename(o3_df, 'DailyMeanPPB' = 'Arithmetic Mean')
+
+#--> Take out Alaska, Hawaii, Puerto Rico
+o3_df %>%
+  filter(!('State Name' == 'Alaska')) %>%
+  filter(!('State Name' == 'Hawaii')) %>%
+  filter(!('State Name' == 'Puerto Rico')) %>%
+  filter(DailyMeanPPB > .01) %>%
+  filter(Longitude > -142) -> o3_df
+
+#--> Compute the yearly mean Ozone
+o3_df %>%
+  group_by(Identifier) %>%
+  summarise_at(vars('DailyMeanPPB'), mean) %>%
+  ungroup() -> daily_mean_o3_df
+
+#--> Compute a yearly mean AQI
+o3_df %>%
+  group_by(Identifier) %>%
+  summarise_at(vars('AQI'), mean) %>%
+  ungroup() -> daily_mean_AQI_o3_df
+
+#--> Join the unique sensors, yearly NO2 ppb, and coordinates
+o3_df %>%
+  ungroup() %>%
+  select('State Name', 'City Name', 'Identifier', 'Latitude', 'Longitude') %>%
+  full_join(daily_mean_o3_df, by = 'Identifier') %>%
+  distinct() %>%
+  full_join(daily_mean_AQI_o3_df) %>%
+  distinct() %>%
+  rename('DailyMeanAQI' = 'AQI') -> daily_mean_o3_df
+
+rm(daily_mean_ppb_o3_df, daily_mean_AQI_o3_df)
+
+head(daily_mean_o3_df)
+
+```
+
+Now we have two dataframes--daily_mean_no2_df and daily_mean_o3_df. These both contain their respective daily averages of their pollutants in ppb. They also both contain AQI measurements. Let's map Ozone the way we did with Nitrous Dioxide. Then we'll map AQI and put all three in a grid.
+
+```{r}
+#--> Create an sf compatable data type
+daily_mean_o3_df <- daily_mean_o3_df[order(daily_mean_o3_df$DailyMeanPPB), ]
+daily_mean_o3_sf <- st_as_sf(daily_mean_o3_df, coords = c("Longitude", "Latitude"))
+
+#--> Color spectrum
+Npal2 <- colorNumeric(
+  palette = "YlOrRd", n = 10,
+  domain = daily_mean_o3_sf$DailyMeanPPB
+)
+
+#--> Make our map
+o3_circles_map <- daily_mean_o3_sf %>%
+  leaflet() %>%
+  addProviderTiles(providers$Stamen.TonerLines, group = "Basemap") %>%
+  addProviderTiles(providers$Stamen.TonerLite, group = "Basemap") %>%
+  addCircles(radius = daily_mean_o3_sf$DailyMeanPPB*2000000, fillOpacity = .6, 
+             fillColor = Npal2(daily_mean_o3_sf$DailyMeanPPB), stroke = FALSE) %>%
+  addLegend("bottomright", pal = Npal2, values = ~DailyMeanPPB, 
+            labFormat = function(type, cuts, p) {
+              n = length(cuts) 
+              paste0(prettyNum(cuts[-n], digits=0, big.mark = ",", scientific=F), 
+                     " - ", prettyNum(cuts[-1], digits=0, big.mark=",", scientific=T))},
+            title = "Avg. Daily O3 (ppb)", opacity = 1)
+
+o3_circles_map
+```
+We can see that there are many more sensors for Ozone than Nitorus Dioxide. The areas of the country with the worst levels of Ozone are California, Arizona, Utah, Colorado, and Wyoming. For the most part, levels on the East coast and midwest are not as high.
+
+Finally, let's take a look at AQI.
+
+```{r}
+#--> Color spectrum
+Npal3 <- colorNumeric(
+  palette = "YlOrRd", n = 10,
+  domain = daily_mean_o3_sf$DailyMeanAQI
+)
+
+#--> Make our map
+aqi_circles_map <- daily_mean_o3_sf %>%
+  leaflet() %>%
+  addProviderTiles(providers$Stamen.TonerLines, group = "Basemap") %>%
+  addProviderTiles(providers$Stamen.TonerLite, group = "Basemap") %>%
+  addCircles(radius = daily_mean_o3_sf$DailyMeanPPB*2000000, fillOpacity = .6, 
+             fillColor = Npal3(daily_mean_o3_sf$DailyMeanAQI), stroke = FALSE) %>%
+  addLegend("bottomright", pal = Npal3, values = ~DailyMeanAQI, 
+            labFormat = function(type, cuts, p) {
+              n = length(cuts) 
+              paste0(prettyNum(cuts[-n], digits=0, big.mark = ",", scientific=F), 
+                     " - ", prettyNum(cuts[-1], digits=0, big.mark=",", scientific=T))},
+            title = "Avg. Daily Air Quality Index", opacity = 1)
+
+aqi_circles_map
+```
+It looks like AQI is the worst in California and still not so great in Arizona, Colorado, and Wyoming. Let's create a scatter plot with a linear model to look at the correlation between both AQI with Ozone and AQI with Nitrous Dioxide.
+
+```{r}
+
+library(gridExtra)
+
+p1 <- ggplot(data = daily_mean_no2_df, 
+             mapping = aes(x = DailyMeanPPB, y = DailyMeanAQI)) +
+  geom_point() +
+  geom_smooth(method = 'lm') + 
+  scale_y_continuous(limits = c(0, 80)) +
+  xlab('Nitrous Dioxide (ppb)') +
+  ylab('Air Quality Index') +
+  ggtitle('Relationship between NO2 and AQI in 2017')
+
+p2 <- ggplot(data = daily_mean_o3_df, 
+             mapping = aes(x = DailyMeanPPB, y = DailyMeanAQI)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  scale_y_continuous(limits = c(0, 80)) +
+  xlab('Ozone (ppb)') +
+  ylab('Air Quality Index') +
+  ggtitle('Relationship between Ozone and AQI in 2017')
+
+ grid.arrange(p1, p2, nrow = 1)
+
+```
+
+There is a positive relationship for both variables with AQI. NO$_2$ seems to be a stronger predictor of high AQI than O$_3$.
