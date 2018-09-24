@@ -2,7 +2,9 @@
 title: 'NO$_2$ Sensor Analysis'
 author: "Coleman Breen"
 date: "September 10, 2018"
-output: html_document
+output: 
+  html_document:
+    keep_md: true
 ---
 ## Analysis and visualization of NO$_2$ in the US
 
@@ -20,7 +22,7 @@ library(tidyverse)
 
 ```{r}
 #--> Load in data
-no2_df <- read_csv('daily_42602_2017.csv')
+no2_df <- read_csv('data/daily_42602_2017.csv')
 names(no2_df)
 ```
 ```{r}
@@ -216,7 +218,7 @@ no2_circles_map
 I'm curious to see how similar maps displaying the AQI and O$_3$ in a similar way. We already have the AQI data but let's load in O$_3$ and take a look at that.
 
 ```{r}
-o3_df <- read_csv('daily_44201_2017.csv')
+o3_df <- read_csv('data/daily_44201_2017.csv')
 ```
 
 ```{r}
