@@ -7,12 +7,30 @@ output:
     keep_md: true
 ---
 
-```{r}
+
+```r
 knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_chunk$set(warning = FALSE)
 knitr::opts_chunk$set(message = FALSE)
 
 library(tidyverse)
+```
+
+```
+## -- Attaching packages ----------------------------------------------------------------------------------------------------- tidyverse 1.2.1 --
+```
+
+```
+## v ggplot2 3.0.0     v purrr   0.2.5
+## v tibble  1.4.2     v dplyr   0.7.6
+## v tidyr   0.8.1     v stringr 1.3.1
+## v readr   1.1.1     v forcats 0.3.0
+```
+
+```
+## -- Conflicts -------------------------------------------------------------------------------------------------------- tidyverse_conflicts() --
+## x dplyr::filter() masks stats::filter()
+## x dplyr::lag()    masks stats::lag()
 ```
 
 # New York City Traffic Collisions
@@ -23,17 +41,20 @@ In this analysis, we'll be looking at traffic collisions in New York City. We'll
 
 We'll start by loading in the data and taking a look at it.
 
-```{r}
+
+```r
 nyc_df <- read_csv('data/NYPD_Motor_Vehicle_Collisions.csv')
 ```
 This is a ton of information--over a million observations! Let's start by mapping all of the observations, just to see if any pattern emerges. We'll look at collisions based on zipcode.
 
-```{r}
+
+```r
 #--> Make variable name dplyr friendly
 nyc_df <- rename(nyc_df, 'ZIP' = 'ZIP CODE')
 ```
 
-```{r}
+
+```r
 library(ggplot2)
 library(choroplethr)
 library(choroplethrZip)
@@ -60,12 +81,15 @@ choro$set_zoom_zip(state_zoom = NULL, county_zoom = nyc_counties,  msa_zoom=NULL
 choro$render()
 ```
 
+![](traffic_accidents_nyc_analysis_files/figure-html/unnamed-chunk-4-1.png)<!-- -->
+
 
 ## How are these high traffic collisions locations different at different times of the day?
 
 Let's take a look at the same map but broken into times of the day. We'll split the day into four equal parts.
 
-```{r}
+
+```r
 library(lubridate)
 
 nyc_df <- mutate(nyc_df, Hour = hour(TIME))
@@ -86,8 +110,8 @@ nyc_df %>%
   filter(Hour < 24) -> nyc_t4_df
 ```
 
-```{r}
 
+```r
 #--> First set
 #--> Go through the process of looking at hits by zip code (should refactor into function)
 nyc_t1_df %>%
@@ -109,11 +133,11 @@ nyc_t2_df %>%
 t2_df <- transmute(t2_df, region = (ZIP), value = n)
 t2_df %>%
   mutate(region = as.character(region)) -> t2_df
-
 ```
 
 Break this into two code chunks to make a bit more readable.
-```{r}
+
+```r
 #--> Third set
 #--> Go through the process of looking at hits by zip code (should refactor into function)
 nyc_t3_df %>%
@@ -139,8 +163,8 @@ t4_df %>%
 
 Now, make 4 maps (basically faceting by time of day).
 
-```{r}
 
+```r
 #--> Free up some RAM
 rm(nyc_t1_df, nyc_t2_df, nyc_t3_df, nyc_t4_df)
 
@@ -151,7 +175,11 @@ choro1$ggplot_scale = scale_fill_brewer(name = "Occurences", palette = "YlOrRd",
                                        drop = FALSE)
 choro1$set_zoom_zip(state_zoom = NULL, county_zoom = nyc_counties,  msa_zoom=NULL, zip_zoom=NULL)
 choro1$render()
+```
 
+![](traffic_accidents_nyc_analysis_files/figure-html/unnamed-chunk-8-1.png)<!-- -->
+
+```r
 #--> Number 2
 choro2 = ZipChoropleth$new(t2_df)
 choro2$title = "6AM to Noon"
@@ -159,7 +187,11 @@ choro2$ggplot_scale = scale_fill_brewer(name = "Occurences", palette = "YlOrRd",
                                        drop = FALSE)
 choro2$set_zoom_zip(state_zoom = NULL, county_zoom = nyc_counties,  msa_zoom=NULL, zip_zoom=NULL)
 choro2$render()
+```
 
+![](traffic_accidents_nyc_analysis_files/figure-html/unnamed-chunk-8-2.png)<!-- -->
+
+```r
 #--> Number 3
 choro3 = ZipChoropleth$new(t3_df)
 choro3$title = "Noon to 6PM"
@@ -167,7 +199,11 @@ choro3$ggplot_scale = scale_fill_brewer(name = "Occurences", palette = "YlOrRd",
                                        drop = FALSE)
 choro3$set_zoom_zip(state_zoom = NULL, county_zoom = nyc_counties,  msa_zoom=NULL, zip_zoom=NULL)
 choro3$render()
+```
 
+![](traffic_accidents_nyc_analysis_files/figure-html/unnamed-chunk-8-3.png)<!-- -->
+
+```r
 #--> Number 4
 choro4 = ZipChoropleth$new(t4_df)
 choro4$title = "6PM to Midnight"
@@ -175,10 +211,16 @@ choro4$ggplot_scale = scale_fill_brewer(name = "Occurences", palette = "YlOrRd",
                                        drop = FALSE)
 choro4$set_zoom_zip(state_zoom = NULL, county_zoom = nyc_counties,  msa_zoom=NULL, zip_zoom=NULL)
 choro4$render()
+```
 
+![](traffic_accidents_nyc_analysis_files/figure-html/unnamed-chunk-8-4.png)<!-- -->
+
+```r
 library(gridExtra)
 grid.arrange(choro1$render(), choro2$render(), choro3$render(), choro4$render(), nrow=2)
 ```
+
+![](traffic_accidents_nyc_analysis_files/figure-html/unnamed-chunk-8-5.png)<!-- -->
 
 To make this better, I could scale the color axis and make it so that each zip code has a certain percentage of accidents instead of raw counts. We could also look at accidents that are fatal and non-fatal and see if there are hot spots there.
 
@@ -186,8 +228,8 @@ To make this better, I could scale the color axis and make it so that each zip c
 
 I'm pulling data from [Zillow](https://www.zillow.com/research/data/). 
 
-```{r, error = TRUE}
 
+```r
 #--> Read in data
 home_price_df <- read_csv('data/home_prices_by_zip.csv')
 data(df_pop_zip)
@@ -196,12 +238,24 @@ home_price_df %>%
   transmute(region = as.character(RegionName), value = (PeakZHVI %/% 1000)) %>%
   filter(region %in% df_pop_zip$region) -> home_price_df
 head(home_price_df)
+```
 
+```
+## # A tibble: 6 x 2
+##   region value
+##   <chr>  <dbl>
+## 1 10025   1141
+## 2 60657    352
+## 3 10023   1623
+## 4 77494    336
+## 5 60614    429
+## 6 79936    132
 ```
 
 Let's see a side-by-side map and then we'll join the home prices with collision occurence and see if there's a relationship in a scatter plot.
 
-```{r}
+
+```r
 choroPrice = ZipChoropleth$new(home_price_df)
 choroPrice$title = "Median Home Values (2017)"
 choroPrice$ggplot_scale = scale_fill_brewer(name = "Price ($100k)", palette = "Greens", 
@@ -212,9 +266,12 @@ library(gridExtra)
 grid.arrange(choroPrice$render(), choro$render(), nrow = 1)
 ```
 
+![](traffic_accidents_nyc_analysis_files/figure-html/unnamed-chunk-10-1.png)<!-- -->
+
 There is no clear relationship between home value and prevelance of car accidents that I can see from this visualization. Let's create a scatter plot to look.
 
-```{r}
+
+```r
 full_join(df_pop_zip, home_price_df, by = "region") %>%
   ggplot(aes(x = value.x, y = value.y)) +
   geom_point() +
@@ -223,5 +280,7 @@ full_join(df_pop_zip, home_price_df, by = "region") %>%
   ylab('Median Home Value (2017)') +
   ggtitle('Home Value and Car Accidents')
 ```
+
+![](traffic_accidents_nyc_analysis_files/figure-html/unnamed-chunk-11-1.png)<!-- -->
 
 There is not much of a correlation between the occurence of motor vehicle collisisons and the median home value. 
