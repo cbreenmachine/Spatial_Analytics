@@ -1,0 +1,304 @@
+---
+title: "Chicago Crime Analysis Part 1"
+author: "Coleman Breen, Stephanie Cleland, Nathan Horswill"
+date: "October 12, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+# Initial Exploration and Observations
+
+For this analysis, we will be looking at crimes in Chicago from 2001 to 2017. The data can be found at [Chicago Crime Data](https://data.cityofchicago.org/Public-Safety/Crimes-2001-to-present/ijzp-q8t2). We will be looking at 
+Load in data, what are we working with?  
+
+[Chicago community areas](https://www.lib.uchicago.edu/e/collections/maps/uofcgis.html)
+
+```{r}
+library(plyr)
+library(ggmap)
+library(maps)
+library(mapdata)
+library(rgdal)
+library(data.table)
+library(sp)
+library(ggalt)
+library(tidyverse)
+```
+
+```{r}
+crimes <- fread('chicago_crimes_2001_present.csv', header = TRUE, sep = ',', data.table = FALSE)
+```
+
+## Data cleaning 
+
+```{r}
+#--> Rename variables to be tidyverse-compliant, drop columns
+crimes2 <- crimes %>%
+  rename(PrimaryType = 'Primary Type') %>%
+  rename(LocationDescription = 'Location Description') %>%
+  dplyr::select(-ID, -'Case Number', -IUCR, -Beat, -Block, -District, -Ward,
+         -'Community Area', -'FBI Code', -'X Coordinate', -'Y Coordinate')
+
+#--> What type of LocationDescriptions are there
+head(unique(crimes2$LocationDescription))
+```
+
+For the sake of this analysis, we are concerned with public places. 
+```{r}
+#--> Define public places
+public_places <- c("STREET", "SIDEWALK", "ALLEY")
+
+crimes3 <- crimes2 %>%
+  filter(LocationDescription %in% public_places)
+```
+
+
+# Heat map
+
+To create a heat map of crimes, we will want to overlay a few components. First, we want the occurences of crime. We also want to show the Chicago community area divisions, train stops, and train lines. We'll have to build this up piece by piece. First, we'll create the community area boundaries.
+
+```{r}
+#--> Convert to zipcodes from lat, long
+comm_areas <- readOGR(dsn="chicago_comm_areas", layer="chicomm")
+plot(comm_areas)
+```
+
+We'll convert the geographic coordinates of crimes into a form that we can easily overlay other features onto. Specifically, we'll convert these coordinates into a `SpatialPointsDataFrame`.
+
+```{r}
+
+#--> Pull out the coordinates
+coords <- crimes3[c("Longitude", "Latitude")]
+
+#--> Filter out na
+coords <- coords[, ] %>%
+  filter(!is.na(Longitude)) %>%
+  filter(!is.na(Latitude))
+
+#--> COnvert to spatial points data frame
+sp <- SpatialPointsDataFrame(coords = coords, data = coords)
+
+#--> Fix projection
+my_projection <- comm_areas@proj4string
+proj4string(sp) <- my_projection
+
+#--> Aggregate so that we can map by community area
+ID <- over(sp, comm_areas )
+crimes_agg <- cbind(sp@data, ID)
+```
+
+Now we will read in the coordinates of the individual train stations. We'll have to do some cleaning to make these stop locations work with the `rgdal` and `sp` libraries.
+
+```{r}
+#--> Read in stops
+stops <- fread('chicago_train_stops.csv', header = TRUE, sep = ',', data.table = FALSE)
+
+#--> Clean
+library(stringr)
+stops$Location %>%
+  str_remove_all("[(,)]") %>%
+  str_split(" ") -> stop_locs
+
+#--> Convert to a list of doubles
+stop_locs <- as.numeric(unlist(stop_locs))
+
+#--> Pull out lat/lon
+stops_pts <- SpatialPoints(cbind(stop_locs[c(TRUE, FALSE)],stop_locs[c(FALSE, TRUE)]))
+```
+
+We'll do a little bit more manipulation to make this mapping work. 
+
+```{r}
+#--> Convert comm_areas to a data frame
+comm_areas@data$id <- rownames(comm_areas@data)
+comm_areas.points <- fortify(comm_areas, region = "id")
+comm_areas.df <- plyr::join(comm_areas.points, comm_areas@data, by = "id")
+
+#--> Make the stops into a normal df
+stops_df <- as.data.frame(stops_pts)
+colnames(stops_df) <- c("Latitude", "Longitude")
+```
+
+Finally, we need the train lines.
+
+```{r}
+#--> Read in the train lines
+lines_shape <- readOGR("CTA_RailLines/CTA_RailLines.shp")
+lines_shape <- spTransform(lines_shape, CRS("+proj=longlat +datum=WGS84"))
+lines_shape_df <- fortify(lines_shape)
+```
+
+Finally, we can overlay all of these pieces to get an informative map.
+
+```{r}
+#--> Sample  so that R to avoid memory issues
+crimes4 <- sample_n(crimes3, 10000)
+rm(crimes2, crimes3) # Free up RAM
+
+#--> Plot as a heat map
+chicago_plot <- ggplot(data = crimes4) +
+  #--> Heat map of crimes
+  stat_density2d(data = crimes4, show.legend = FALSE, 
+                 mapping = aes(x = Longitude, y = Latitude,                               
+                               fill = ..level.., alpha = (..level..)*3),
+                 geom="polygon", size=2, bins=15) + 
+  #--> Color the heat map
+  scale_fill_gradient(low="yellow", high="red") +
+  #--> Overlay the community areas
+  geom_polygon(data=comm_areas.df, 
+               mapping=aes(x=long, y=lat, group=group), 
+               color="grey", size=.1, fill=NA) +
+  #--> Overlay the train stops
+  geom_point(data=stops_df, mapping=aes(x=Longitude, y=Latitude),
+             color="black", size = .1) +
+  #--> Overlay the train lines
+  geom_path(data=lines_shape_df, aes(x = long, y = lat, group = group),
+                color = "black", size = .3, alpha = 0.5) +
+  #--> Fix the coordinate projection
+  coord_proj(proj4string(comm_areas)) + 
+  #--> Style and title
+  ggtitle("Density of crimes in Chicago") +
+  theme_void()
+
+chicago_plot
+```
+
+```{r}
+#--> Free up RAM
+rm(crimes4, chicago_plot) 
+```
+
+# Explore Demographic Factors as Predictors of Crime
+
+```{r}
+#--> Count crimes_agg
+crime_counts_df <- count(crimes_agg, CHICOMNO)
+
+#--> Join the data
+crime_counts_df <- crime_counts_df %>%
+  dplyr::full_join(crimes_agg, by = 'CHICOMNO') %>%
+  filter(!duplicated(CHICOMNO)) %>%
+  filter(!is.na(CHICOMNO))
+
+head(crime_counts_df)
+```
+
+We'll add [US Census](https://datahub.cmap.illinois.gov/dataset/2010-census-data-summarized-to-chicago-community-areas/resource/b30b47bf-bb0d-46b6-853b-47270fb7f626) data to tell us the populations by age, race, gender, etc. based on community area.
+
+```{r}
+comm_demo_df <- read_csv("chicago_comm_areas/chicago_comm_areas_demographics.csv", 
+                      skip=1, col_names=TRUE)
+
+#--> Clean up
+names(comm_demo_df)[2] <- "ID"
+comm_demo_df <- comm_demo_df[,1:67] # Before the variables become x1, x2, etc.
+
+crime_counts_df %>%
+  mutate("ID" = as.integer(CHICOMNO)) -> crime_counts_df
+
+#--> Join with pop
+crime_counts_df <- full_join(crime_counts_df, comm_demo_df, by="ID")
+```
+
+```{r}
+#--> Clean up variable names a bit
+names(crime_counts_df) %>%
+  str_replace_all(" ", "") %>%
+  str_replace_all(".x", "") %>%
+  str_replace_all("NotHispanicorLatino,", "") -> names(crime_counts_df)
+
+#--> Convert n to RawCounts"
+names(crime_counts_df)[names(crime_counts_df) == "n"] <- "RawCounts"
+
+#--> Calculate percentages, keep variables of interest
+crime_counts_df %>%
+  #mutate(NormCounts = (RawCounts * TotalPopulation / 100000) / 17) %>%
+  mutate(NormCounts = RawCounts / 100000) %>%
+  mutate(NormCounts = NormCounts / 17) %>%
+  mutate(NormCounts = NormCounts * TotalPopulation) %>%
+  dplyr::select(ID, NormCounts, RawCounts, TotalPopulation, everything())-> crime_counts_df
+```
+
+What community areas have the highest crime rate?
+
+```{r}
+#--> What community area has so many crimes?
+head(crime_counts_df[order(crime_counts_df$NormCounts, decreasing=TRUE), ], 10)
+```
+
+```{r}
+#--> Scatter plot with lm on crime/family income
+family_income <- ggplot() +
+  geom_point(data=crime_counts_df, mapping=aes(x=FAMINC, y=NormCounts)) +
+  ylim(0, NA) +
+  ggtitle("Crime and family income") +
+  xlab("Annual family income (USD)") +
+  ylab("Crimes (per 100k per year)")
+
+family_income
+
+```
+
+```{r}
+#--> Scatter plot with lm on crime/per cap income
+percap_income <- ggplot() +
+  geom_point(data=crime_counts_df, mapping=aes(x=PERCAPINC, y=NormCounts)) +
+  ylim(0, NA) +
+  ggtitle("Crime and per capita income") +
+  xlab("Per capita annual income (USD)") +
+  ylab("Crimes (per 100k per year)")
+
+percap_income
+```
+
+```{r}
+#--> Scatter of crime vs household size
+house_size <- ggplot() +
+  geom_point(data=crime_counts_df, mapping=aes(x=AverageHouseholdSize, y=NormCounts)) +
+  ylim(0, NA) +
+  ggtitle("Crime and household size") +
+  xlab("Number of occupants") +
+  ylab("Crimes (per 100k per year)")
+
+house_size
+
+```
+
+```{r}
+#--> Clean up a bit
+crime_counts_df <- crime_counts_df %>%
+  mutate(BlackPercent = BlackorAfricanAmericanalone / TotalPopulation) %>%
+  mutate(WhitePercent = Whitealone / TotalPopulation) %>%
+  mutate(OccupiedVsVacant = OccupiedHousingUnits / VacantHousingUnits) %>%
+  mutate(VacantPercent = VacantHousingUnits / TotalHousingUnits)
+```
+
+```{r}
+#--> Scatter of crime vs vacant
+vacant <- ggplot() +
+  geom_point(data=crime_counts_df, mapping=aes(x=VacantPercent, y=NormCounts)) +
+  ylim(0, NA) +
+  ggtitle("Crime and vacant units") +
+  xlab("Percent of housing units which are vacant") +
+  ylab("Crimes (per 100k per year)")
+
+vacant
+```
+
+```{r}
+#--> Scatter of crime vs race
+race <- ggplot() +
+  geom_point(data=crime_counts_df, mapping=aes(x=WhitePercent, y=NormCounts), color = 'red') +
+  geom_point(data=crime_counts_df, mapping=aes(x=BlackPercent, y=NormCounts), color = 'blue') +
+  ylim(0, NA) +
+  ggtitle("Crime and vacant units") +
+  xlab("Percent race") +
+  ylab("Crimes (per 100k per year)")
+
+race
+```
